@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Hermes</string>
+    <string name="accessibility_service_description">Hermes 全自主手机智能体与屏幕 RPA 自动化助手。支持根据语音与文本指令自动模拟屏幕点击、滑动交互、读取界面节点以及跨应用执行自动化任务。</string>
+</resources>
