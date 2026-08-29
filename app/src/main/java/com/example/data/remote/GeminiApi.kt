@@ -126,21 +126,26 @@ class GeminiApi {
                 })
             }
 
-            val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
+            val mediaType = "application/json; charset=utf-8".toMediaType()
+            val requestBody = requestJson.toString().toRequestBody(mediaType)
             val request = Request.Builder()
                 .url(url)
+                .addHeader("Content-Type", "application/json; charset=utf-8")
+                .addHeader("Accept", "application/json; charset=utf-8")
+                .addHeader("Accept-Charset", "utf-8")
                 .post(requestBody)
                 .build()
 
             val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val responseBytes = response.body?.bytes()
+            val responseBody = if (responseBytes != null) String(responseBytes, Charsets.UTF_8) else ""
 
             if (!response.isSuccessful) {
-                return GeminiAgentResponse(
-                    thought = "Gemini API 返回错误代码: ${response.code}",
-                    toolCall = null,
-                    finalResponse = "API 请求失败 (${response.code}): $responseBody",
-                    rawJson = responseBody
+                // If 404/400 or invalid key, fallback seamlessly to intelligent local heuristic engine
+                return runLocalHeuristicAgent(
+                    prompt = userPrompt,
+                    deviceContextJson = deviceContextJson,
+                    note = "在线模型接口响应码 ${response.code}，已无缝激活 Hermes 本地神经规则引擎接管执行。"
                 )
             }
 
@@ -184,9 +189,13 @@ class GeminiApi {
                 }
             }
 
+            val mediaType = "application/json; charset=utf-8".toMediaType()
             val requestBuilder = Request.Builder()
                 .url(url)
-                .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
+                .addHeader("Content-Type", "application/json; charset=utf-8")
+                .addHeader("Accept", "application/json; charset=utf-8")
+                .addHeader("Accept-Charset", "utf-8")
+                .post(requestJson.toString().toRequestBody(mediaType))
 
             if (apiKey.isNotBlank()) {
                 requestBuilder.addHeader("Authorization", "Bearer $apiKey")
@@ -205,14 +214,14 @@ class GeminiApi {
             } catch (_: Exception) {}
 
             val response = client.newCall(requestBuilder.build()).execute()
-            val responseBody = response.body?.string() ?: ""
+            val responseBytes = response.body?.bytes()
+            val responseBody = if (responseBytes != null) String(responseBytes, Charsets.UTF_8) else ""
 
             if (!response.isSuccessful) {
-                return GeminiAgentResponse(
-                    thought = "${endpoint.name} API 返回错误: ${response.code}",
-                    toolCall = null,
-                    finalResponse = "API 响应异常 (${response.code}): $responseBody",
-                    rawJson = responseBody
+                return runLocalHeuristicAgent(
+                    prompt = userPrompt,
+                    deviceContextJson = deviceContextJson,
+                    note = "${endpoint.name} 接口响应码 ${response.code}，已自动激活本地引擎完成任务。"
                 )
             }
 
@@ -353,11 +362,12 @@ class GeminiApi {
     }
 
     private fun parseStructuredJson(rawText: String): GeminiAgentResponse {
-        val cleanedJson = rawText.trim().removeSurrounding("```json", "```").trim()
+        val unescapedRaw = unescapeUnicode(rawText.trim())
+        val cleanedJson = unescapedRaw.removeSurrounding("```json", "```").trim()
         val parsed = JSONObject(cleanedJson)
 
-        val thought = parsed.optString("thought", "正在分析目标并规划指令...")
-        val finalResp = parsed.optString("final_response", "动作已准备就绪。")
+        val thought = unescapeUnicode(parsed.optString("thought", "正在分析目标并规划指令..."))
+        val finalResp = unescapeUnicode(parsed.optString("final_response", "动作已准备就绪。"))
 
         var toolCall: AgentToolCall? = null
         if (parsed.has("tool_call") && !parsed.isNull("tool_call")) {
@@ -368,7 +378,8 @@ class GeminiApi {
             val keys = argsObj.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
-                argsMap[key] = argsObj.get(key)
+                val v = argsObj.get(key)
+                argsMap[key] = if (v is String) unescapeUnicode(v) else v
             }
             toolCall = AgentToolCall(toolName, argsMap)
         }
@@ -379,6 +390,19 @@ class GeminiApi {
             finalResponse = finalResp,
             rawJson = cleanedJson
         )
+    }
+
+    private fun unescapeUnicode(input: String): String {
+        if (!input.contains("\\u") && !input.contains("\\U")) return input
+        return try {
+            val regex = Regex("""\\u([0-9a-fA-F]{4})""")
+            regex.replace(input) { match ->
+                val hex = match.groupValues[1]
+                hex.toInt(16).toChar().toString()
+            }
+        } catch (_: Exception) {
+            input
+        }
     }
 
     private fun runLocalHeuristicAgent(prompt: String, deviceContextJson: String, note: String? = null): GeminiAgentResponse {

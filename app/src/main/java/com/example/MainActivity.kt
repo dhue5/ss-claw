@@ -60,6 +60,7 @@ fun HermesApp(viewModel: HermesViewModel) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ObsidianBg,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
                 title = {
@@ -152,6 +153,7 @@ fun HermesApp(viewModel: HermesViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
                 .background(ObsidianBg)
         ) {
             when (uiState.selectedTab) {

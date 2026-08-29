@@ -861,7 +861,7 @@ fun SettingsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text("Hermes Android 智能体操作系统", style = MaterialTheme.typography.titleSmall, color = TextPrimary)
-                    Text("v1.1.0-PRO • 多模型接入与 24/7 全自主热更新架构", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Text("v1.2.0-RELEASE • 多模型接入 • 流式输出 • 深度思考折叠 • 24/7 守护", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                 }
             }
         }

@@ -23,6 +23,7 @@ data class ChatMessage(
     val thought: String? = null,
     val toolCall: String? = null,
     val steps: List<ExecutionStep> = emptyList(),
+    val isStreaming: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -114,6 +115,9 @@ class HermesViewModel(application: Application) : AndroidViewModel(application) 
     val voiceManager = HermesVoiceManager(app)
     val isListeningVoice: StateFlow<Boolean> = voiceManager.isListening
     val recognizedVoiceText: StateFlow<String?> = voiceManager.recognizedText
+    val voiceSoundLevel: StateFlow<Float> = voiceManager.soundLevel
+    val isSpeakingTts: StateFlow<Boolean> = voiceManager.isSpeaking
+    val speakingMessageId: StateFlow<String?> = voiceManager.speakingMessageId
 
     init {
         refreshDeviceStats()
@@ -135,16 +139,91 @@ class HermesViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(deviceStats = stats) }
     }
 
+    fun toggleSpeakMessage(messageId: String, text: String) {
+        voiceManager.speak(text, messageId)
+    }
+
+    fun stopSpeaking() {
+        voiceManager.stopSpeaking()
+    }
+
+    fun clearChatHistory() {
+        voiceManager.stopSpeaking()
+        _uiState.update {
+            it.copy(
+                chatMessages = listOf(
+                    ChatMessage(
+                        isUser = false,
+                        text = "会话历史已清空。Hermes 智能中枢准备就绪，随时响应您的自动化指令。",
+                        thought = "上下文重置完成，内存缓存已刷新。"
+                    )
+                )
+            )
+        }
+    }
+
+    fun regenerateLastPrompt() {
+        if (_uiState.value.isProcessing) return
+        val lastUserMessage = _uiState.value.chatMessages.lastOrNull { it.isUser }
+        if (lastUserMessage != null) {
+            submitPrompt(lastUserMessage.text)
+        }
+    }
+
+    fun getDynamicSuggestions(): List<String> {
+        val list = mutableListOf<String>()
+        val stats = _uiState.value.deviceStats
+
+        // Context-aware dynamic suggestion based on battery
+        if (stats != null && stats.batteryLevel <= 30 && !stats.isCharging) {
+            list.add("🔋 电池仅剩 ${stats.batteryLevel}%，开启极限省电")
+        }
+
+        // Context-aware based on clipboard
+        val clipboard = deviceController.readClipboard()
+        if (!clipboard.isNullOrBlank() && clipboard.length < 80 && (clipboard.startsWith("http://") || clipboard.startsWith("https://"))) {
+            list.add("🔗 分析并处理剪贴板链接")
+        } else if (!clipboard.isNullOrBlank() && clipboard.length in 5..60) {
+            list.add("📋 总结剪贴板文本")
+        }
+
+        // Time-aware suggestion
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour in 21..23 || hour in 0..5) {
+            list.add("🌙 启动夜间模式与就寝简报")
+        } else if (hour in 6..9) {
+            list.add("☀️ 生成今日晨间早报与系统概况")
+        }
+
+        // Core system capabilities
+        list.add("⚡ 全量诊断系统性能与资源")
+        list.add("📱 扫描当前活跃前台应用")
+        list.add("🔔 发送自动化测试通知")
+        list.add("🛠️ 运行 Telegram 消息推送插件")
+
+        return list.distinct().take(6)
+    }
+
     // --- AGENT GOAL EXECUTION ---
     fun submitPrompt(prompt: String) {
         if (prompt.isBlank() || _uiState.value.isProcessing) return
 
         val userMessage = ChatMessage(isUser = true, text = prompt)
+        val assistantMessageId = java.util.UUID.randomUUID().toString()
+        val initialAssistantMsg = ChatMessage(
+            id = assistantMessageId,
+            isUser = false,
+            text = "正在深度推理规划与调用工具中...",
+            thought = "正在分析指令 '$prompt' 并检索设备状态与工具集...",
+            steps = emptyList(),
+            isStreaming = true
+        )
+
         _uiState.update {
             it.copy(
                 isProcessing = true,
                 currentSteps = emptyList(),
-                chatMessages = it.chatMessages + userMessage
+                chatMessages = it.chatMessages + userMessage + initialAssistantMsg
             )
         }
 
@@ -153,41 +232,102 @@ class HermesViewModel(application: Application) : AndroidViewModel(application) 
             agent.executeGoal(
                 prompt = prompt,
                 onStateChanged = { state ->
-                    _uiState.update { it.copy(agentState = state) }
+                    _uiState.update { current ->
+                        val updatedList = current.chatMessages.map { msg ->
+                            if (msg.id == assistantMessageId) {
+                                when (state) {
+                                    is AgentState.Thinking -> msg.copy(
+                                        thought = "思考与策略规划中...",
+                                        text = "正在分析指令目标并制定执行策略..."
+                                    )
+                                    is AgentState.Executing -> msg.copy(
+                                        thought = state.thought,
+                                        toolCall = state.toolName,
+                                        text = "正在调度执行工具 [${state.toolName}]..."
+                                    )
+                                    else -> msg
+                                }
+                            } else msg
+                        }
+                        current.copy(agentState = state, chatMessages = updatedList)
+                    }
                 },
                 onStepAdded = { step ->
                     liveSteps.add(step)
-                    _uiState.update { it.copy(currentSteps = liveSteps.toList()) }
+                    _uiState.update { current ->
+                        val updatedList = current.chatMessages.map { msg ->
+                            if (msg.id == assistantMessageId) {
+                                msg.copy(steps = liveSteps.toList())
+                            } else msg
+                        }
+                        current.copy(currentSteps = liveSteps.toList(), chatMessages = updatedList)
+                    }
                 }
             )
 
-            // When finished, convert to Assistant Message in chat
+            // When finished, stream out the final output characters for a smooth typing animation
             val finalState = _uiState.value.agentState
-            val assistantMsg = when (finalState) {
-                is AgentState.Completed -> ChatMessage(
-                    isUser = false,
-                    text = finalState.resultMessage,
-                    thought = finalState.thought,
-                    toolCall = finalState.toolCalled,
-                    steps = liveSteps.toList()
+            val (fullTargetText, finalThought, finalToolCall) = when (finalState) {
+                is AgentState.Completed -> Triple(
+                    finalState.resultMessage,
+                    finalState.thought,
+                    finalState.toolCalled
                 )
-                is AgentState.Error -> ChatMessage(
-                    isUser = false,
-                    text = "Execution Error: ${finalState.errorMessage}",
-                    thought = "Agent caught an exception during execution.",
-                    steps = liveSteps.toList()
+                is AgentState.Error -> Triple(
+                    "Execution Error: ${finalState.errorMessage}",
+                    "Agent caught an exception during execution.",
+                    null
                 )
-                else -> ChatMessage(
-                    isUser = false,
-                    text = "Task cycle concluded.",
-                    steps = liveSteps.toList()
+                else -> Triple(
+                    "Task cycle concluded.",
+                    null,
+                    null
                 )
             }
 
-            _uiState.update {
-                it.copy(
+            // Stream typewriter effect into the assistant chat message
+            val chunkSize = when {
+                fullTargetText.length > 200 -> 8
+                fullTargetText.length > 60 -> 4
+                else -> 2
+            }
+            var displayedLength = 0
+            while (displayedLength < fullTargetText.length) {
+                displayedLength = (displayedLength + chunkSize).coerceAtMost(fullTargetText.length)
+                val currentText = fullTargetText.substring(0, displayedLength)
+                _uiState.update { current ->
+                    val updatedList = current.chatMessages.map { msg ->
+                        if (msg.id == assistantMessageId) {
+                            msg.copy(
+                                text = currentText,
+                                thought = finalThought,
+                                toolCall = finalToolCall,
+                                steps = liveSteps.toList(),
+                                isStreaming = displayedLength < fullTargetText.length
+                            )
+                        } else msg
+                    }
+                    current.copy(chatMessages = updatedList)
+                }
+                delay(16)
+            }
+
+            // Finalize streaming
+            _uiState.update { current ->
+                val updatedList = current.chatMessages.map { msg ->
+                    if (msg.id == assistantMessageId) {
+                        msg.copy(
+                            text = fullTargetText,
+                            thought = finalThought,
+                            toolCall = finalToolCall,
+                            steps = liveSteps.toList(),
+                            isStreaming = false
+                        )
+                    } else msg
+                }
+                current.copy(
                     isProcessing = false,
-                    chatMessages = it.chatMessages + assistantMsg
+                    chatMessages = updatedList
                 )
             }
             refreshDeviceStats()

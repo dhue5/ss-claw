@@ -233,3 +233,82 @@ fun StepTimelineItem(
         }
     }
 }
+
+@Composable
+fun AudioWaveformVisualizer(
+    soundLevel: Float,
+    isListening: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val barCount = 12
+    val infiniteTransition = rememberInfiniteTransition(label = "waveform")
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(28.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (i in 0 until barCount) {
+            val animFactor by infiniteTransition.animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1.0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(400 + i * 40, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "bar_$i"
+            )
+            val dynamicHeight = if (isListening) {
+                val base = (soundLevel * 2f).coerceIn(4f, 22f)
+                (base * animFactor).coerceIn(4f, 24f).dp
+            } else {
+                4.dp
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 2.dp)
+                    .width(3.dp)
+                    .height(dynamicHeight)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(CyanPrimary, EmeraldTertiary)
+                        )
+                    )
+            )
+        }
+    }
+}
+
+@Composable
+fun MiniMetricBar(
+    label: String,
+    valueText: String,
+    percentage: Float,
+    color: Color = CyanPrimary,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            Text(text = valueText, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { percentage.coerceIn(0f, 1f) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp)),
+            color = color,
+            trackColor = ObsidianCardBorder
+        )
+    }
+}
+

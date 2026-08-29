@@ -40,12 +40,14 @@ class HttpExecutor {
             when (method.uppercase()) {
                 "GET" -> requestBuilder.get()
                 "POST" -> {
-                    val mediaType = (headers["Content-Type"] ?: "application/json").toMediaTypeOrNull()
+                    val rawContentType = headers["Content-Type"] ?: "application/json; charset=utf-8"
+                    val mediaType = rawContentType.toMediaTypeOrNull()
                     val reqBody = (body ?: "{}").toRequestBody(mediaType)
                     requestBuilder.post(reqBody)
                 }
                 "PUT" -> {
-                    val mediaType = (headers["Content-Type"] ?: "application/json").toMediaTypeOrNull()
+                    val rawContentType = headers["Content-Type"] ?: "application/json; charset=utf-8"
+                    val mediaType = rawContentType.toMediaTypeOrNull()
                     val reqBody = (body ?: "{}").toRequestBody(mediaType)
                     requestBuilder.put(reqBody)
                 }
@@ -55,7 +57,8 @@ class HttpExecutor {
 
             val response = client.newCall(requestBuilder.build()).execute()
             val duration = System.currentTimeMillis() - startTime
-            val responseBody = response.body?.string() ?: ""
+            val responseBytes = response.body?.bytes()
+            val responseBody = if (responseBytes != null) String(responseBytes, Charsets.UTF_8) else ""
 
             val respHeaders = mutableMapOf<String, String>()
             response.headers.forEach { pair ->
